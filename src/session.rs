@@ -217,6 +217,14 @@ impl Session {
                 let remote_err = double_sign(request_state);
                 Ok(Some(remote_err))
             }
+            Err(e)
+                if e.kind() == StateErrorKind::HeightRegression
+                    || e.kind() == StateErrorKind::StepRegression
+                    || e.kind() == StateErrorKind::RoundRegression =>
+            {
+                let remote_err = regression(request_state);
+                Ok(Some(remote_err))
+            }
             Err(e) => Err(e.into()),
         }
     }
@@ -276,5 +284,12 @@ fn double_sign(consensus_state: consensus::State) -> proto::privval::RemoteSigne
             "double signing requested at height: {}",
             consensus_state.height
         ),
+    }
+}
+
+fn regression(consensus_state: consensus::State) -> proto::privval::RemoteSignerError {
+    proto::privval::RemoteSignerError {
+        code: 3,
+        description: format!("regression requested at height: {}", consensus_state.height),
     }
 }

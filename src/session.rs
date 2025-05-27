@@ -1,13 +1,7 @@
 //! A session with a validator node
 
 use crate::{
-    chain::{self, state::StateErrorKind, Chain},
-    config::ValidatorConfig,
-    connection::{tcp, unix::UnixConnection, Connection},
-    error::{Error, ErrorKind::*},
-    prelude::*,
-    privval::SignableMsg,
-    rpc::{Request, Response},
+    chain::{self, state::StateErrorKind, Chain}, config::ValidatorConfig, connection::{tcp, unix::UnixConnection, Connection}, error::{Error, ErrorKind::*}, keyring::Signature, prelude::*, privval::SignableMsg, rpc::{Request, Response}
 };
 use std::{os::unix::net::UnixStream, time::Instant};
 use tendermint::{consensus, TendermintKey};
@@ -135,7 +129,15 @@ impl Session {
             });
 
         if let Some(remote_err) = self.update_consensus_state(chain, &signable_msg)? {
+            // regression
+            if remote_err.code == 3 {
+                if let Some(last_sign) = self.check_existing_sign(chain, &signable_msg) { 
+                    return Ok(last_sign.into());
+                }
+            }
+
             // In the event of double signing we send a response to notify the validator
+
             return Ok(Response::error(signable_msg, remote_err));
         }
 
@@ -165,6 +167,7 @@ impl Session {
             }
         }
 
+        self.save_sign(chain, signable_msg.clone());
         Ok(signable_msg.into())
     }
 
@@ -227,6 +230,19 @@ impl Session {
             }
             Err(e) => Err(e.into()),
         }
+    }
+
+    fn check_existing_sign(&self, chain: &Chain, signable_msg: &SignableMsg) -> Option<SignableMsg> {
+        let request_state = signable_msg.consensus_state();
+        let chain_state = chain.state.lock().unwrap();
+
+        chain_state.get_last_vote(request_state.height, request_state.round, request_state.step)
+    }
+
+    fn save_sign(&self, chain: &Chain, signable_msg: SignableMsg) {
+        let request_state = signable_msg.consensus_state();
+        let mut chain_state = chain.state.lock().unwrap();
+        chain_state.save_sign(request_state.height, request_state.round, request_state.step, signable_msg);
     }
 
     /// Get the public key for (the only) public key in the keyring

@@ -21,7 +21,7 @@ const PRECOMMIT_CODE: SignedMsgCode = 0x02;
 const PROPOSAL_CODE: SignedMsgCode = 0x20;
 
 /// Trait for signed messages.
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub enum SignableMsg {
     /// Proposals
     Proposal(Proposal),

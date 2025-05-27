@@ -10,7 +10,7 @@ pub use self::error::{StateError, StateErrorKind};
 
 use crate::{
     error::{Error, ErrorKind::*},
-    prelude::*,
+    prelude::*, privval::SignableMsg,
 };
 use std::{
     fs,
@@ -19,11 +19,15 @@ use std::{
 };
 use tempfile::NamedTempFile;
 use tendermint::consensus;
+use std::collections::BTreeMap;
+use tendermint::block::{Height, Round};
 
 /// State tracking for double signing prevention
 pub struct State {
     consensus_state: consensus::State,
     state_file_path: PathBuf,
+
+    last_signs: BTreeMap<(Height,Round,i8), SignableMsg>,
 }
 
 impl State {
@@ -46,6 +50,7 @@ impl State {
                 Ok(Self {
                     consensus_state,
                     state_file_path: path.as_ref().to_owned(),
+                    last_signs: BTreeMap::new(),
                 })
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -172,6 +177,7 @@ impl State {
         let initial_state = Self {
             consensus_state,
             state_file_path: path.to_owned(),
+            last_signs: BTreeMap::new(),
         };
 
         initial_state.sync_to_disk()?;
@@ -204,12 +210,22 @@ impl State {
 
         Ok(())
     }
+
+    pub fn get_last_vote(&self, height: Height, round: Round, step: i8) -> Option<SignableMsg> {
+        self.last_signs.get(&(height, round, step)).cloned()
+    }
+
+    pub fn save_sign(&mut self, height: Height, round: Round, step: i8, signable_msg: SignableMsg) {
+        self.last_signs.insert((height, round, step), signable_msg);
+        self.last_signs.retain(|key, _| height.value() < 100 + key.0.value());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tendermint::block;
+    use crate::privval::SignableMsg;
+    use tendermint::{block, proposal::{Proposal, Type}};
 
     const EXAMPLE_BLOCK_ID: &str =
         "26C0A41F3243C6BCD7AD2DFF8A8D83A71D29D307B5326C227F734A1A512FE47D";
@@ -246,6 +262,7 @@ mod tests {
                 State {
                     consensus_state: $old_state,
                     state_file_path: EXAMPLE_PATH.into(),
+                    last_signs: BTreeMap::new(),
                 }
                 .update_consensus_state($new_state)
                 .unwrap();
@@ -261,6 +278,7 @@ mod tests {
                 let err = State {
                     consensus_state: $old_state,
                     state_file_path: EXAMPLE_PATH.into(),
+                    last_signs: BTreeMap::new(),
                 }
                 .update_consensus_state($new_state)
                 .expect_err("expected StateErrorKind::DoubleSign but succeeded");
@@ -311,4 +329,46 @@ mod tests {
         state!(1, 1, 2, None),
         state!(1, 1, 2, block_id!(EXAMPLE_BLOCK_ID))
     );
+
+    #[test]
+    fn test_save_sign() {
+        let mut state = State {
+            consensus_state: state!(1, 1, 0, None),
+            state_file_path: EXAMPLE_PATH.into(),
+            last_signs: BTreeMap::new(),
+        };
+
+        state.save_sign(Height::from(1 as u32), Round::from(1 as u16), 0, SignableMsg::Proposal(Proposal{
+            msg_type: Type::Proposal,
+            pol_round: None,
+            block_id: None,
+            timestamp: None,
+            signature: None,
+            height: Height::from(1 as u32),
+            round: Round::from(1 as u16),
+        }));
+
+        assert_eq!(state.last_signs.len(), 1);
+        state.save_sign(Height::from(100 as u32), Round::from(1 as u16), 0, SignableMsg::Proposal(Proposal{
+            msg_type: Type::Proposal,
+            pol_round: None,
+            block_id: None,
+            timestamp: None,
+            signature: None,
+            height: Height::from(100 as u32),
+            round: Round::from(1 as u16),
+        }));
+        assert_eq!(state.last_signs.len(), 2);
+
+        state.save_sign(Height::from(101 as u32), Round::from(1 as u16), 0, SignableMsg::Proposal(Proposal{
+            msg_type: Type::Proposal,
+            pol_round: None,
+            block_id: None,
+            timestamp: None,
+            signature: None,
+            height: Height::from(101 as u32),
+            round: Round::from(1 as u16),
+        }));
+        assert_eq!(state.last_signs.len(), 2);
+    }
 }

@@ -128,12 +128,16 @@ impl Session {
                 panic!("chain '{}' missing from registry!", &self.config.chain_id);
             });
 
-        if let Some(last_sign) = self.check_existing_sign(chain, &signable_msg) {
-            return Ok(last_sign.into());
-        }
-
         if let Some(remote_err) = self.update_consensus_state(chain, &signable_msg)? {
+            // regression
+            if remote_err.code == 3 {
+                if let Some(last_sign) = self.check_existing_sign(chain, &signable_msg) { 
+                    return Ok(last_sign.into());
+                }
+            }
+
             // In the event of double signing we send a response to notify the validator
+
             return Ok(Response::error(signable_msg, remote_err));
         }
 
